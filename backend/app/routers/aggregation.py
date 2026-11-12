@@ -1,4 +1,7 @@
-"""聚合查询接口：维护聚合规则，覆盖提交校验、启用规则、停用规则等动作。"""
+"""聚合查询接口：维护聚合规则，覆盖提交校验、启用规则、停用规则等动作。
+
+/results 等字面量路径必须声明在 /{entry_id} 之前，否则会被路径参数抢走。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -15,6 +18,29 @@ service = AggregationService()
 LIST_FIELDS = ["规则编号", "聚合函数", "目标指标", "分组维度", "时间范围", "筛选条件", "采样比例", "缓存秒数"]
 STATUSES = ["草稿", "待校验", "已启用", "已停用"]
 
+
+# ---------- 聚合结果（字面量路径，须在 /{entry_id} 之前） ----------
+
+@router.get("/results", response_model=PageResult[dict])
+def list_results(
+    rule_id: int | None = Query(default=None, description="按规则过滤"),
+    metric_code: str | None = Query(default=None, description="按指标编号过滤"),
+    page: int = 1,
+    size: int = 50,
+) -> PageResult[dict]:
+    """聚合结果记录：每条都保留当时的口径版本、版本来源与计算公式快照。"""
+    items, total = service.list_results(rule_id=rule_id, metric_code=metric_code, page=page, size=size)
+    return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出聚合查询清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "aggregation", "total": total, "items": items}
+
+
+# ---------- 聚合规则本身的增查与状态流转 ----------
 
 @router.get("", response_model=PageResult[dict])
 def list_entries(
@@ -58,8 +84,19 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     return ActionResult(ok=True, message=message, entry=entry)
 
 
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出聚合查询清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "aggregation", "total": total, "items": items}
+@router.post("/{entry_id}/execute", response_model=ActionResult)
+def execute_entry(entry_id: int) -> ActionResult:
+    """新执行：按规则当前确认的口径版本生成一条结果记录。"""
+    result, message = service.execute(entry_id, trigger="新执行")
+    if result is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=result)
+
+
+@router.post("/{entry_id}/recalculate", response_model=ActionResult)
+def recalculate_entry(entry_id: int) -> ActionResult:
+    """主动重算：生成新的结果记录，历史结果保留当时口径及版本来源。"""
+    result, message = service.recalculate(entry_id)
+    if result is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=result)

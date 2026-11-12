@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.metricversion import latest_published_version, metric_version_state
 from app.store import store
 
 MODULE = "metricdef"
@@ -28,7 +29,16 @@ class MetricdefService:
             rows = [row for row in rows if row.get("status") == status]
         total = len(rows)
         start = max(page - 1, 0) * size
-        return rows[start:start + size], total
+        return [self._enrich(row) for row in rows[start:start + size]], total
+
+    @staticmethod
+    def _enrich(row: dict[str, Any]) -> dict[str, Any]:
+        """附加口径版本状态：非规范版本文字标为未归档，绝不当成最新版本。"""
+        enriched = dict(row)
+        enriched["版本状态"] = metric_version_state(row.get("口径版本"))
+        latest = latest_published_version(str(row.get("指标编号") or ""))
+        enriched["最新发布版本"] = latest.get("版本号") if latest else "—"
+        return enriched
 
     def get_entry(self, entry_id: int) -> dict[str, Any] | None:
         return store.find(MODULE, entry_id)
